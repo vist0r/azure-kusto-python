@@ -6,10 +6,10 @@ import webbrowser
 from six.moves.urllib.parse import urlparse
 import dateutil.parser
 
-from adal import AuthenticationContext
-from adal.constants import TokenResponseFields, OAuth2DeviceCodeResponseParameters, AADConstants
+from adal import AuthenticationContext, AdalError
+from adal.constants import TokenResponseFields, OAuth2DeviceCodeResponseParameters
 
-from .exceptions import KustoClientError
+from .exceptions import KustoClientError, KustoAuthenticationError
 
 
 @unique
@@ -24,11 +24,9 @@ class AuthenticationMethod(Enum):
 
 class _AadHelper(object):
     def __init__(self, kcsb):
-        authority = kcsb.authority_id or "microsoft.com"
+        authority = kcsb.authority_id or "common"
         self._kusto_cluster = "{0.scheme}://{0.hostname}".format(urlparse(kcsb.data_source))
-        self._adal_context = AuthenticationContext(
-            "https://{0}/{1}".format(AADConstants.WORLD_WIDE_AUTHORITY, authority)
-        )
+        self._adal_context = AuthenticationContext("https://login.microsoftonline.com/{0}".format(authority))
         self._username = None
         if all([kcsb.aad_user_id, kcsb.password]):
             self._authentication_method = AuthenticationMethod.aad_username_password
@@ -39,13 +37,7 @@ class _AadHelper(object):
             self._authentication_method = AuthenticationMethod.aad_application_key
             self._client_id = kcsb.application_client_id
             self._client_secret = kcsb.application_key
-        elif all(
-            [
-                kcsb.application_client_id,
-                kcsb.application_certificate,
-                kcsb.application_certificate_thumbprint,
-            ]
-        ):
+        elif all([kcsb.application_client_id, kcsb.application_certificate, kcsb.application_certificate_thumbprint]):
             self._authentication_method = AuthenticationMethod.aad_application_certificate
             self._client_id = kcsb.application_client_id
             self._certificate = kcsb.application_certificate
@@ -54,11 +46,29 @@ class _AadHelper(object):
             self._authentication_method = AuthenticationMethod.aad_device_login
             self._client_id = "db662dc1-0cfe-4e1c-a843-19a68e65be58"
 
-    def acquire_token(self):
+    def acquire_authorization_header(self):
         """Acquire tokens from AAD."""
-        token = self._adal_context.acquire_token(
-            self._kusto_cluster, self._username, self._client_id
-        )
+        try:
+            return self._acquire_authorization_header()
+        except AdalError as error:
+            if self._authentication_method is AuthenticationMethod.aad_username_password:
+                kwargs = {"username": self._username, "client_id": self._client_id}
+            elif self._authentication_method is AuthenticationMethod.aad_application_key:
+                kwargs = {"client_id": self._client_id}
+            elif self._authentication_method is AuthenticationMethod.aad_device_login:
+                kwargs = {"client_id": self._client_id}
+            elif self._authentication_method is AuthenticationMethod.aad_application_certificate:
+                kwargs = {"client_id": self._client_id, "thumbprint": self._thumbprint}
+            else:
+                raise error
+
+            kwargs["resource"] = self._kusto_cluster
+            kwargs["authority"] = self._adal_context.authority.url
+
+            raise KustoAuthenticationError(self._authentication_method.value, error, **kwargs)
+
+    def _acquire_authorization_header(self):
+        token = self._adal_context.acquire_token(self._kusto_cluster, self._username, self._client_id)
         if token is not None:
             expiration_date = dateutil.parser.parse(token[TokenResponseFields.EXPIRES_ON])
             if expiration_date > datetime.now() + timedelta(minutes=1):
@@ -82,9 +92,7 @@ class _AadHelper(object):
             code = self._adal_context.acquire_user_code(self._kusto_cluster, self._client_id)
             print(code[OAuth2DeviceCodeResponseParameters.MESSAGE])
             webbrowser.open(code[OAuth2DeviceCodeResponseParameters.VERIFICATION_URL])
-            token = self._adal_context.acquire_token_with_device_code(
-                self._kusto_cluster, code, self._client_id
-            )
+            token = self._adal_context.acquire_token_with_device_code(self._kusto_cluster, code, self._client_id)
         elif self._authentication_method is AuthenticationMethod.aad_application_certificate:
             token = self._adal_context.acquire_token_with_client_certificate(
                 self._kusto_cluster, self._client_id, self._certificate, self._thumbprint
@@ -98,6 +106,4 @@ class _AadHelper(object):
 
 
 def _get_header(token):
-    return "{0} {1}".format(
-        token[TokenResponseFields.TOKEN_TYPE], token[TokenResponseFields.ACCESS_TOKEN]
-    )
+    return "{0} {1}".format(token[TokenResponseFields.TOKEN_TYPE], token[TokenResponseFields.ACCESS_TOKEN])

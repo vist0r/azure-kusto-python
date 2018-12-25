@@ -1,71 +1,118 @@
 ﻿"""A simple example how to use KustoClient."""
 
-from azure.kusto.data.request import KustoClient, KustoConnectionStringBuilder
+from azure.kusto.data.request import KustoClient, KustoConnectionStringBuilder, ClientRequestProperties
 from azure.kusto.data.exceptions import KustoServiceError
+from azure.kusto.data.helpers import dataframe_from_result_table
 
-# TODO: this should become functional test at some point.
 
-KUSTO_CLUSTER = "https://help.kusto.windows.net"
+######################################################
+##                        AUTH                      ##
+######################################################
+cluster = "https://help.kusto.windows.net"
 
 # In case you want to authenticate with AAD application.
-CLIENT_ID = "<insert here your AAD application id>"
-CLIENT_SECRET = "<insert here your AAD application key>"
-KCSB = KustoConnectionStringBuilder.with_aad_application_key_authentication(
-    KUSTO_CLUSTER, CLIENT_ID, CLIENT_SECRET
+client_id = "<insert here your AAD application id>"
+client_secret = "<insert here your AAD application key>"
+
+# read more at https://docs.microsoft.com/en-us/onedrive/find-your-office-365-tenant-id
+authority_id = "<insert here your tenant id>"
+
+kcsb = KustoConnectionStringBuilder.with_aad_application_key_authentication(
+    cluster, client_id, client_secret, authority_id
 )
 
 # In case you want to authenticate with AAD application certificate.
-FILENAME = "path to a PEM certificate"
-with open(FILENAME, "r") as pem_file:
+filename = "path to a PEM certificate"
+with open(filename, "r") as pem_file:
     PEM = pem_file.read()
 
-THUMBPRINT = "certificate's thumbprint"
-KCSB = KustoConnectionStringBuilder.with_aad_application_certificate_authentication(
-    KUSTO_CLUSTER, CLIENT_ID, PEM, THUMBPRINT
+thumbprint = "certificate's thumbprint"
+kcsb = KustoConnectionStringBuilder.with_aad_application_certificate_authentication(
+    cluster, client_id, PEM, thumbprint, authority_id
 )
 
-KUSTO_CLIENT = KustoClient(KCSB)
+# In case you want to authenticate with AAD username and password
+username = "<username>"
+password = "<password>"
+kcsb = KustoConnectionStringBuilder.with_aad_user_password_authentication(cluster, username, password, authority_id)
 
-# In case you want to authenticate with the logged in AAD user.
-KUSTO_CLIENT = KustoClient(KUSTO_CLUSTER)
+# In case you want to authenticate with AAD device code.
+# Please note that if you choose this option, you'll need to autenticate for every new instance that is initialized.
+# It is highly recommended to create one instance and use it for all of your queries.
+kcsb = KustoConnectionStringBuilder.with_aad_device_authentication(cluster)
 
-KUSTO_DATABASE = "Samples"
-KUSTO_QUERY = "StormEvents | take 10"
 
-RESPONSE = KUSTO_CLIENT.execute(KUSTO_DATABASE, KUSTO_QUERY)
-for row in RESPONSE.primary_results[0]:
-    print(row[0], " ", row["EventType"])
+# In case you want anonymous authentication. For instance if you run Kusto locally.
+client = KustoClient(cluster)
+
+# The authentication method will be taken from the chosen KustoConnectionStringBuilder.
+client = KustoClient(kcsb)
+
+######################################################
+##                       QUERY                      ##
+######################################################
+
+# once authenticated, usage is as following
+db = "Samples"
+query = "StormEvents | take 10"
+
+response = client.execute(db, query)
+
+# iterating over rows is possible
+for row in response.primary_results[0]:
+    # printing specific columns by index
+    print("value at 0 {}".format(row[0]))
+    print("\n")
+    # printing specific columns by name
+    print("EventType:{}".format(row["EventType"]))
+
+# tables are serializeable, so:
+with open("results.json", "w+") as f:
+    f.write(str(response.primary_results[0]))
+
+# we also support dataframes:
+dataframe = dataframe_from_result_table(response.primary_results[0])
+
+print(dataframe)
+
+##################
+### EXCEPTIONS ###
+##################
+
 
 # Query is too big to be executed
-KUSTO_QUERY = "StormEvents"
+query = "StormEvents"
 try:
-    RESPONSE = KUSTO_CLIENT.execute(KUSTO_DATABASE, KUSTO_QUERY)
+    response = client.execute(db, query)
 except KustoServiceError as error:
     print("2. Error:", error)
     print("2. Is semantic error:", error.is_semantic_error())
     print("2. Has partial results:", error.has_partial_results())
     print("2. Result size:", len(error.get_partial_results()))
 
-RESPONSE = KUSTO_CLIENT.execute(KUSTO_DATABASE, KUSTO_QUERY, accept_partial_results=True)
-print("3. Response error count: ", RESPONSE.errors_count)
-print("3. Exceptions:", RESPONSE.get_exceptions())
-print("3. Result size:", len(RESPONSE.primary_results))
+properties = ClientRequestProperties()
+properties.set_option(properties.OptionDeferPartialQueryFailures, True)
+response = client.execute(db, query, properties=properties)
+print("3. Response error count: ", response.errors_count)
+print("3. Exceptions:", response.get_exceptions())
+print("3. Result size:", len(response.primary_results))
 
 # Query has semantic error
-KUSTO_QUERY = "StormEvents | where foo = bar"
+query = "StormEvents | where foo = bar"
 try:
-    RESPONSE = KUSTO_CLIENT.execute(KUSTO_DATABASE, KUSTO_QUERY)
+    response = client.execute(db, query)
 except KustoServiceError as error:
     print("4. Error:", error)
     print("4. Is semantic error:", error.is_semantic_error())
     print("4. Has partial results:", error.has_partial_results())
 
-# Testing data frames
-KUSTO_CLIENT = KustoClient("https://kustolab.kusto.windows.net")
-RESPONSE = KUSTO_CLIENT.execute("ML", ".show version")
-QUERY = """
+
+client = KustoClient("https://kustolab.kusto.windows.net")
+response = client.execute("ML", ".show version")
+
+query = """
 let max_t = datetime(2016-09-03);
 service_traffic
 | make-series num=count() on TimeStamp in range(max_t-5d, max_t, 1h) by OsVer
 """
-DATA_FRAME = KUSTO_CLIENT.execute_query("ML", QUERY).primary_results[0].to_dataframe()
+response = client.execute_query("ML", query).primary_results[0]

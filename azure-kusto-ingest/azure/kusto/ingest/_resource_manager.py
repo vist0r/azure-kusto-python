@@ -1,11 +1,30 @@
 """This module is serve as a cache to all resources needed by the kusto ingest client."""
 
 from datetime import datetime, timedelta
+import re
 
-from ._connection_string import _ConnectionString
+_URI_FORMAT = re.compile("https://(\\w+).(queue|blob|table).core.windows.net/([\\w,-]+)\\?(.*)")
 
 
-class _IngestClientResources:
+class _ResourceUri:
+    def __init__(self, storage_account_name, object_type, object_name, sas):
+        self.storage_account_name = storage_account_name
+        self.object_type = object_type
+        self.object_name = object_name
+        self.sas = sas
+
+    @classmethod
+    def parse(cls, uri):
+        """Parses uri into a ResourceUri object"""
+        match = _URI_FORMAT.search(uri)
+        return cls(match.group(1), match.group(2), match.group(3), match.group(4))
+
+    def to_string(self):
+        """Stringify the resource uri instance"""
+        return "https://{0.storage_account_name}.{0.object_type}.core.windows.net/{0.object_name}?{0.sas}".format(self)
+
+
+class _IngestClientResources(object):
     def __init__(
         self,
         secured_ready_for_aggregation_queues=None,
@@ -31,7 +50,7 @@ class _IngestClientResources:
         return all(resources)
 
 
-class _ResourceManager:
+class _ResourceManager(object):
     def __init__(self, kusto_client):
         self._kusto_client = kusto_client
         self._refresh_period = timedelta(hours=1)
@@ -45,35 +64,23 @@ class _ResourceManager:
     def _refresh_ingest_client_resources(self):
         if (
             not self._ingest_client_resources
-            or (self._ingest_client_resources_last_update + self._refresh_period)
-            <= datetime.utcnow()
+            or (self._ingest_client_resources_last_update + self._refresh_period) <= datetime.utcnow()
             or not self._ingest_client_resources.is_applicable()
         ):
             self._ingest_client_resources = self._get_ingest_client_resources_from_service()
             self._ingest_client_resources_last_update = datetime.utcnow()
 
-    def _get_resource_by_name(self, df, resource_name):
-        resource = (
-            df[df["ResourceTypeName"] == resource_name]
-            .StorageRoot.map(_ConnectionString.parse)
-            .tolist()
-        )
-        return resource
+    def _get_resource_by_name(self, table, resource_name):
+        return [_ResourceUri.parse(row["StorageRoot"]) for row in table if row["ResourceTypeName"] == resource_name]
 
     def _get_ingest_client_resources_from_service(self):
-        df = (
-            self._kusto_client.execute("NetDefaultDB", ".get ingestion resources")
-            .primary_results[0]
-            .to_dataframe()
-        )
+        table = self._kusto_client.execute("NetDefaultDB", ".get ingestion resources").primary_results[0]
 
-        secured_ready_for_aggregation_queues = self._get_resource_by_name(
-            df, "SecuredReadyForAggregationQueue"
-        )
-        failed_ingestions_queues = self._get_resource_by_name(df, "FailedIngestionsQueue")
-        successful_ingestions_queues = self._get_resource_by_name(df, "SuccessfulIngestionsQueue")
-        containers = self._get_resource_by_name(df, "TempStorage")
-        status_tables = self._get_resource_by_name(df, "IngestionsStatusTable")
+        secured_ready_for_aggregation_queues = self._get_resource_by_name(table, "SecuredReadyForAggregationQueue")
+        failed_ingestions_queues = self._get_resource_by_name(table, "FailedIngestionsQueue")
+        successful_ingestions_queues = self._get_resource_by_name(table, "SuccessfulIngestionsQueue")
+        containers = self._get_resource_by_name(table, "TempStorage")
+        status_tables = self._get_resource_by_name(table, "IngestionsStatusTable")
 
         return _IngestClientResources(
             secured_ready_for_aggregation_queues,
@@ -93,9 +100,9 @@ class _ResourceManager:
             self._authorization_context_last_update = datetime.utcnow()
 
     def _get_authorization_context_from_service(self):
-        return self._kusto_client.execute(
-            "NetDefaultDB", ".get kusto identity token"
-        ).primary_results[0][0]["AuthorizationContext"]
+        return self._kusto_client.execute("NetDefaultDB", ".get kusto identity token").primary_results[0][0][
+            "AuthorizationContext"
+        ]
 
     def get_ingestion_queues(self):
         self._refresh_ingest_client_resources()

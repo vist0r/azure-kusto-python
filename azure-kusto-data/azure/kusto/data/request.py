@@ -1,12 +1,14 @@
 """A module to make a Kusto request."""
 
 import uuid
+import json
+from datetime import timedelta
 from enum import Enum, unique
 import requests
 
 from .security import _AadHelper
 from .exceptions import KustoServiceError
-from ._response import _KustoResponseDataSetV1, _KustoResponseDataSetV2
+from ._response import KustoResponseDataSetV1, KustoResponseDataSetV2
 from ._version import VERSION
 
 
@@ -21,6 +23,7 @@ class KustoConnectionStringBuilder(object):
         """Distinct set of values KustoConnectionStringBuilder can have."""
 
         data_source = "Data Source"
+        aad_federated_security = "AAD Federated Security"
         aad_user_id = "AAD User ID"
         password = "Password"
         application_client_id = "Application Client Id"
@@ -49,6 +52,8 @@ class KustoConnectionStringBuilder(object):
                 return cls.application_certificate_thumbprint
             if key in ["authority id", "authorityid", "authority", "tenantid", "tenant", "tid"]:
                 return cls.authority_id
+            if key in ["aad federated security", "federated security", "federated", "fed", "aadfed"]:
+                return cls.aad_federated_security
             raise KeyError(key)
 
     def __init__(self, connection_string):
@@ -62,6 +67,9 @@ class KustoConnectionStringBuilder(object):
         self._internal_dict = {}
         if connection_string is not None and "=" not in connection_string.partition(";")[0]:
             connection_string = "Data Source=" + connection_string
+
+        self[self.ValidKeywords.authority_id] = "common"
+
         for kvp_string in connection_string.split(";"):
             key, _, value = kvp_string.partition("=")
             self[key] = value
@@ -72,43 +80,49 @@ class KustoConnectionStringBuilder(object):
         except KeyError:
             raise KeyError("%s is not supported as an item in KustoConnectionStringBuilder" % key)
 
-        self._internal_dict[keyword] = value.strip()
+        self._internal_dict[keyword] = value if keyword is self.ValidKeywords.aad_federated_security else value.strip()
 
     @classmethod
-    def with_aad_user_password_authentication(cls, connection_string, user_id, password):
+    def with_aad_user_password_authentication(cls, connection_string, user_id, password, authority_id="common"):
         """Creates a KustoConnection string builder that will authenticate with AAD user name and
         password.
-        :param str connection_string: Kusto connection string should by of the format:
-        https://<clusterName>.kusto.windows.net
+        :param str connection_string: Kusto connection string should by of the format: https://<clusterName>.kusto.windows.net
         :param str user_id: AAD user ID.
         :param str password: Corresponding password of the AAD user.
+        :param str authority_id: optional param. defaults to "common"
         """
         _assert_value_is_valid(user_id)
         _assert_value_is_valid(password)
         kcsb = cls(connection_string)
+        kcsb[kcsb.ValidKeywords.aad_federated_security] = True
         kcsb[kcsb.ValidKeywords.aad_user_id] = user_id
         kcsb[kcsb.ValidKeywords.password] = password
+        kcsb[kcsb.ValidKeywords.authority_id] = authority_id
+
         return kcsb
 
     @classmethod
-    def with_aad_application_key_authentication(cls, connection_string, aad_app_id, app_key):
-        """Creates a KustoConnection string builder that will authenticate with AAD application and
-        password.
-        :param str connection_string: Kusto connection string should by of the format:
-        https://<clusterName>.kusto.windows.net
+    def with_aad_application_key_authentication(cls, connection_string, aad_app_id, app_key, authority_id):
+        """Creates a KustoConnection string builder that will authenticate with AAD application and key.
+        :param str connection_string: Kusto connection string should by of the format: https://<clusterName>.kusto.windows.net
         :param str aad_app_id: AAD application ID.
-        :param str app_key: Corresponding password of the AAD application.
+        :param str app_key: Corresponding key of the AAD application.
+        :param str authority_id: Authority id (aka Tenant id) must be provided
         """
         _assert_value_is_valid(aad_app_id)
         _assert_value_is_valid(app_key)
+        _assert_value_is_valid(authority_id)
         kcsb = cls(connection_string)
+        kcsb[kcsb.ValidKeywords.aad_federated_security] = True
         kcsb[kcsb.ValidKeywords.application_client_id] = aad_app_id
         kcsb[kcsb.ValidKeywords.application_key] = app_key
+        kcsb[kcsb.ValidKeywords.authority_id] = authority_id
+
         return kcsb
 
     @classmethod
     def with_aad_application_certificate_authentication(
-        cls, connection_string, aad_app_id, certificate, thumbprint
+        cls, connection_string, aad_app_id, certificate, thumbprint, authority_id
     ):
         """Creates a KustoConnection string builder that will authenticate with AAD application and
         a certificate credentials.
@@ -117,24 +131,33 @@ class KustoConnectionStringBuilder(object):
         :param str aad_app_id: AAD application ID.
         :param str certificate: A PEM encoded certificate private key.
         :param str thumbprint: hex encoded thumbprint of the certificate.
+        :param str authority_id: Authority id (aka Tenant id) must be provided
         """
         _assert_value_is_valid(aad_app_id)
         _assert_value_is_valid(certificate)
         _assert_value_is_valid(thumbprint)
+        _assert_value_is_valid(authority_id)
         kcsb = cls(connection_string)
+        kcsb[kcsb.ValidKeywords.aad_federated_security] = True
         kcsb[kcsb.ValidKeywords.application_client_id] = aad_app_id
         kcsb[kcsb.ValidKeywords.application_certificate] = certificate
         kcsb[kcsb.ValidKeywords.application_certificate_thumbprint] = thumbprint
+        kcsb[kcsb.ValidKeywords.authority_id] = authority_id
+
         return kcsb
 
     @classmethod
-    def with_aad_device_authentication(cls, connection_string):
+    def with_aad_device_authentication(cls, connection_string, authority_id="common"):
         """Creates a KustoConnection string builder that will authenticate with AAD application and
         password.
-        :param str connection_string: Kusto connection string should by of the format:
-        https://<clusterName>.kusto.windows.net
+        :param str connection_string: Kusto connection string should by of the format: https://<clusterName>.kusto.windows.net
+        :param str authority_id: optional param. defaults to "common"
         """
-        return cls(connection_string)
+        kcsb = cls(connection_string)
+        kcsb[kcsb.ValidKeywords.aad_federated_security] = True
+        kcsb[kcsb.ValidKeywords.authority_id] = authority_id
+
+        return kcsb
 
     @property
     def data_source(self):
@@ -195,6 +218,11 @@ class KustoConnectionStringBuilder(object):
     def authority_id(self, value):
         self[self.ValidKeywords.authority_id] = value
 
+    @property
+    def aad_federated_security(self):
+        """A Boolean value that instructs the client to perform AAD federated authentication."""
+        return self._internal_dict.get(self.ValidKeywords.aad_federated_security)
+
 
 def _assert_value_is_valid(value):
     if not value or not value.strip():
@@ -209,6 +237,9 @@ class KustoClient(object):
     Tests are run using pytest.
     """
 
+    _mgmt_default_timeout = timedelta(hours=1, seconds=30).seconds
+    _query_default_timeout = timedelta(minutes=4, seconds=30).seconds
+
     def __init__(self, kcsb):
         """Kusto Client constructor.
         :param kcsb: The connection string to initialize KustoClient.
@@ -218,130 +249,105 @@ class KustoClient(object):
         kusto_cluster = kcsb.data_source
         self._mgmt_endpoint = "{0}/v1/rest/mgmt".format(kusto_cluster)
         self._query_endpoint = "{0}/v2/rest/query".format(kusto_cluster)
-        self._aad_helper = _AadHelper(kcsb)
+        self._auth_provider = _AadHelper(kcsb) if kcsb.aad_federated_security else None
 
-    def execute(
-        self,
-        kusto_database,
-        query,
-        accept_partial_results=False,
-        timeout=None,
-        get_raw_response=False,
-    ):
+    def execute(self, database, query, properties=None, get_raw_response=False):
         """Executes a query or management command.
-        :param str kusto_database: Database against query will be executed.
+        :param str database: Database against query will be executed.
         :param str query: Query to be executed.
-        :param bool accept_partial_results: Optional parameter.
-            If query fails, but we receive some results, we consider results as partial.
-            If this is True, results are returned to client, even if there are exceptions.
-            If this is False, exception is raised. Default is False.
-        :param float timeout: Optional parameter. Network timeout in seconds. Default is no timeout.
-        :param bool get_raw_response: Optional parameter.
-            Whether to get a raw response, or a parsed one.
+        :param azure.kusto.data.request.ClientRequestProperties properties: Optional additional properties.
+        :param bool get_raw_response: Optional parameter. Whether to get a raw response, or a parsed one.
         """
         if query.startswith("."):
-            return self.execute_mgmt(
-                kusto_database, query, accept_partial_results, timeout, get_raw_response
-            )
-        return self.execute_query(
-            kusto_database, query, accept_partial_results, timeout, get_raw_response
-        )
+            return self.execute_mgmt(database, query, properties, get_raw_response)
+        return self.execute_query(database, query, properties, get_raw_response)
 
-    def execute_query(
-        self,
-        kusto_database,
-        query,
-        accept_partial_results=False,
-        timeout=None,
-        get_raw_response=False,
-    ):
+    def execute_query(self, database, query, properties=None, get_raw_response=False):
         """Executes a query.
-        :param str kusto_database: Database against query will be executed.
+        :param str database: Database against query will be executed.
         :param str query: Query to be executed.
-        :param bool accept_partial_results: Optional parameter.
-            If query fails, but we receive some results, we consider results as partial.
-            If this is True, results are returned to client, even if there are exceptions.
-            If this is False, exception is raised. Default is False.
-        :param float timeout: Optional parameter. Network timeout in seconds. Default is no timeout.
-        :param bool get_raw_response: Optional parameter.
-            Whether to get a raw response, or a parsed one.
+        :param azure.kusto.data.request.ClientRequestProperties properties: Optional additional properties.
+        :param bool get_raw_response: Optional parameter. Whether to get a raw response, or a parsed one.
         """
         return self._execute(
-            self._query_endpoint,
-            kusto_database,
-            query,
-            accept_partial_results,
-            timeout,
-            get_raw_response,
+            self._query_endpoint, database, query, KustoClient._query_default_timeout, properties, get_raw_response
         )
 
-    def execute_mgmt(
-        self,
-        kusto_database,
-        query,
-        accept_partial_results=False,
-        timeout=None,
-        get_raw_response=False,
-    ):
+    def execute_mgmt(self, database, query, properties=None, get_raw_response=False):
         """Executes a management command.
-        :param str kusto_database: Database against query will be executed.
+        :param str database: Database against query will be executed.
         :param str query: Query to be executed.
-        :param bool accept_partial_results: Optional parameter.
-            If query fails, but we receive some results, we consider results as partial.
-            If this is True, results are returned to client, even if there are exceptions.
-            If this is False, exception is raised. Default is False.
-        :param float timeout: Optional parameter. Network timeout in seconds. Default is no timeout.
-        :param bool get_raw_response: Optional parameter.
-            Whether to get a raw response, or a parsed one.
+        :param azure.kusto.data.request.ClientRequestProperties properties: Optional additional properties.
+        :param bool get_raw_response: Optional parameter. Whether to get a raw response, or a parsed one.
         """
         return self._execute(
-            self._mgmt_endpoint,
-            kusto_database,
-            query,
-            accept_partial_results,
-            timeout,
-            get_raw_response,
+            self._mgmt_endpoint, database, query, KustoClient._mgmt_default_timeout, properties, get_raw_response
         )
 
-    def _execute(
-        self,
-        endpoint,
-        kusto_database,
-        kusto_query,
-        accept_partial_results=False,
-        timeout=None,
-        get_raw_response=False,
-    ):
+    def _execute(self, endpoint, database, query, default_timeout, properties=None, get_raw_response=False):
         """Executes given query against this client"""
 
-        request_payload = {"db": kusto_database, "csl": kusto_query}
+        request_payload = {"db": database, "csl": query}
+        if properties:
+            request_payload["properties"] = properties.to_json()
 
-        access_token = self._aad_helper.acquire_token()
         request_headers = {
-            "Authorization": access_token,
             "Accept": "application/json",
             "Accept-Encoding": "gzip,deflate",
             "Content-Type": "application/json; charset=utf-8",
-            "Fed": "True",
             "x-ms-client-version": "Kusto.Python.Client:" + VERSION,
-            "x-ms-client-request-id": "KPC.execute;" + str(uuid.uuid4()),
+            "x-ms-client-request-id": "KPC.execute" + (".raw" if get_raw_response else "") + ";" + str(uuid.uuid4()),
+            # That is a temporary client request id to understand the usage of the raw response by customers. In case it is not used it will be removed.
         }
 
-        response = requests.post(
-            endpoint, headers=request_headers, json=request_payload, timeout=timeout
-        )
+        if self._auth_provider:
+            request_headers["Authorization"] = self._auth_provider.acquire_authorization_header()
+
+        timeout = self._get_timeout(properties, default_timeout)
+        response = requests.post(endpoint, headers=request_headers, json=request_payload, timeout=timeout)
 
         if response.status_code == 200:
             if get_raw_response:
                 return response.json()
 
             if endpoint.endswith("v2/rest/query"):
-                kusto_response = _KustoResponseDataSetV2(response.json())
+                return KustoResponseDataSetV2(response.json())
             else:
-                kusto_response = _KustoResponseDataSetV1(response.json())
-
-            if kusto_response.errors_count > 0 and not accept_partial_results:
-                raise KustoServiceError(kusto_response.get_exceptions(), response, kusto_response)
-            return kusto_response
+                return KustoResponseDataSetV1(response.json())
         else:
             raise KustoServiceError([response.json()], response)
+
+    def _get_timeout(self, properties, default):
+        if properties:
+            return properties.get_option(ClientRequestProperties.OptionServerTimeout, default)
+        return default
+
+
+class ClientRequestProperties(object):
+    """This class is a POD used by client making requests to describe specific needs from the service executing the requests.
+    For more information please look at: https://docs.microsoft.com/en-us/azure/kusto/api/netfx/request-properties
+    Not all of the documented options are implemented. You are welcome to open an issue in case you need one of them.
+    """
+
+    OptionDeferPartialQueryFailures = "deferpartialqueryfailures"  # TODO: Rename: results_defer_partial_query_failures
+    OptionServerTimeout = "servertimeout"  # TODO: Rename: request_timeout
+
+    def __init__(self):
+        self._options = {}
+
+    def set_option(self, name, value):
+        """Sets an option's value"""
+        _assert_value_is_valid(name)
+        self._options[name] = value
+
+    def has_option(self, name):
+        """Checks if an option is specified."""
+        return name in self._options
+
+    def get_option(self, name, default_value):
+        """Gets an option's value."""
+        return self._options.get(name, default_value)
+
+    def to_json(self):
+        """Safe serialization to a JSON string."""
+        return json.dumps({"Options": self._options})

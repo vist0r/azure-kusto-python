@@ -1,15 +1,19 @@
-# Microsoft Azure Kusto Library for Python
+# Microsoft Azure Kusto  (Azure Data Explorer) SDK  for Python
 [![](https://travis-ci.org/Azure/azure-kusto-python.svg?branch=master)](https://travis-ci.org/Azure/azure-kusto-python)
 
-*azure-kusto-data* Package provides the capability to query Kusto clusters with Python.<br>
-*azure-kusto-ingest* Package allows sending data to Kusto service - i.e. ingest data. 
+[*azure-kusto-data*]("https://github.com/Azure/azure-kusto-python/tree/master/azure-kusto-data") Package provides the capability to query Kusto clusters with Python.<br>
+[![PyPI version](https://badge.fury.io/py/azure-kusto-data.svg)](https://badge.fury.io/py/azure-kusto-data)
+[![Downloads](https://pepy.tech/badge/azure-kusto-data)](https://pepy.tech/project/azure-kusto-data)<br>
+[*azure-kusto-ingest*]("https://github.com/Azure/azure-kusto-python/tree/master/azure-kusto-ingest") Package allows sending data to Kusto service - i.e. ingest data.<br>
+[![PyPI version](https://badge.fury.io/py/azure-kusto-ingest.svg)](https://badge.fury.io/py/azure-kusto-ingest)
+[![Downloads](https://pepy.tech/badge/azure-kusto-ingest)](https://pepy.tech/project/azure-kusto-ingest)<br>
 
 ## Install
 ### Option 1: Via PyPi
 To install via the Python Package Index (PyPI), type:
 
-* pip install azure-kusto-data
-* pip install azure-kusto-ingest
+* `pip install azure-kusto-data`
+* `pip install azure-kusto-ingest`
 
 ### Option 2: Source Via Git
 To get the source code of the SDK via git just type:
@@ -24,6 +28,11 @@ python setup.py install
 
 ### Option 3: Source Zip
 Download a zip of the code via GitHub or PyPi. Then follow the same instructions in option 2.
+
+### Optionals:
+* [_Pandas_](http://pandas.pydata.org/) - Package provides extra functionality for use with pandas. Since these are optional dependencies, install with pandas:
+    * `pip install azure-kusto-data[pandas]`
+    * `pip install azure-kusto-ingest[pandas]`
 
 ## Minimum Requirements
 * Python 2.7, 3.4, 3.5, or 3.6.
@@ -40,3 +49,28 @@ Download a zip of the code via GitHub or PyPi. Then follow the same instructions
 * [Kusto query sample](https://github.com/Azure/azure-kusto-python/blob/master/azure-kusto-data/tests/sample.py)
 
 * [Data ingest sample](https://github.com/Azure/azure-kusto-python/blob/master/azure-kusto-ingest/tests/sample.py)
+
+
+## Need Support?
+- **Have a feature request for SDKs?** Please post it on [User Voice](https://feedback.azure.com/forums/915733-azure-data-explorer) to help us prioritize
+- **Have a technical question?** Ask on [Stack Overflow with tag "azure-data-explorer"](https://stackoverflow.com/questions/tagged/azure-data-explorer)
+- **Need Support?** Every customer with an active Azure subscription has access to [support](https://docs.microsoft.com/en-us/azure/azure-supportability/how-to-create-azure-support-request) with guaranteed response time.  Consider submitting a ticket and get assistance from Microsoft support team
+- **Found a bug?** Please help us fix it by thoroughly documenting it and [filing an issue](https://github.com/Azure/azure-kusto-python/issues/new).
+
+## Looking for SDKs for other languages/platforms?
+- [Node](https://github.com/azure/azure-kusto-node)
+- [Java](https://github.com/azure/azure-kusto-java)
+- [.NET](https://docs.microsoft.com/en-us/azure/kusto/api/netfx/about-the-sdk)
+
+
+# Contribute
+
+We gladly accept community contributions.
+
+- Issues: Please report bugs using the Issues section of GitHub
+- Forums: Interact with the development teams on StackOverflow or the Microsoft Azure Forums
+- Source Code Contributions: If you would like to become an active contributor to this project please follow the instructions provided in [Contributing.md](CONTRIBUTING.md).
+
+This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+
+For general suggestions about Microsoft Azure please use our [UserVoice forum](http://feedback.azure.com/forums/34192--general-feedback).

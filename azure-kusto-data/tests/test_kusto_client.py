@@ -4,20 +4,23 @@ import os
 import json
 import unittest
 from datetime import datetime, timedelta
+import pytest
 from six import text_type
 from mock import patch
 from dateutil.tz.tz import tzutc
-from pandas import DataFrame, Series
-from pandas.util.testing import assert_frame_equal
 
-from azure.kusto.data.request import KustoClient
+from azure.kusto.data.request import KustoClient, ClientRequestProperties
 from azure.kusto.data.exceptions import KustoServiceError
 from azure.kusto.data._response import WellKnownDataSet
+from azure.kusto.data.helpers import dataframe_from_result_table
 
+pandas_installed = False
+try:
+    import pandas
 
-def mocked_aad_helper():
-    """Mock to replace _AadHelper._acquire_token"""
-    return None
+    pandas_installed = True
+except:
+    pass
 
 
 def mocked_requests_post(*args, **kwargs):
@@ -38,12 +41,13 @@ def mocked_requests_post(*args, **kwargs):
 
     if args[0] == "https://somecluster.kusto.windows.net/v2/rest/query":
         if "truncationmaxrecords" in kwargs["json"]["csl"]:
-            file_name = "querypartialresults.json"
+            if json.loads(kwargs["json"]["properties"])["Options"]["deferpartialqueryfailures"]:
+                file_name = "query_partial_results_defer_is_true.json"
+            else:
+                file_name = "query_partial_results_defer_is_false.json"
         elif "Deft" in kwargs["json"]["csl"]:
             file_name = "deft.json"
-        with open(
-            os.path.join(os.path.dirname(__file__), "input", file_name), "r"
-        ) as response_file:
+        with open(os.path.join(os.path.dirname(__file__), "input", file_name), "r") as response_file:
             data = response_file.read()
         return MockResponse(json.loads(data), 200)
 
@@ -52,9 +56,7 @@ def mocked_requests_post(*args, **kwargs):
             file_name = "versionshowcommandresult.json"
         else:
             file_name = "adminthenquery.json"
-        with open(
-            os.path.join(os.path.dirname(__file__), "input", file_name), "r"
-        ) as response_file:
+        with open(os.path.join(os.path.dirname(__file__), "input", file_name), "r") as response_file:
             data = response_file.read()
         return MockResponse(json.loads(data), 200)
 
@@ -80,8 +82,7 @@ class KustoClientTests(unittest.TestCase):
     """Tests class for KustoClient."""
 
     @patch("requests.post", side_effect=mocked_requests_post)
-    @patch("azure.kusto.data.security._AadHelper.acquire_token", side_effect=mocked_aad_helper)
-    def test_sanity_query(self, mock_post, mock_aad):
+    def test_sanity_query(self, mock_post):
         """Test query V2."""
         client = KustoClient("https://somecluster.kusto.windows.net")
         response = client.execute_query("PythonTest", "Deft")
@@ -148,18 +149,10 @@ class KustoClientTests(unittest.TestCase):
             self.assertEqual(type(row["xtextWithNulls"]), type(expected["xtextWithNulls"]))
             self.assertEqual(type(row["xdynamicWithNulls"]), type(expected["xdynamicWithNulls"]))
 
-            expected["rownumber"] = (
-                0 if expected["rownumber"] is None else expected["rownumber"] + 1
-            )
-            expected["rowguid"] = text_type(
-                "0000000{0}-0000-0000-0001-020304050607".format(expected["rownumber"])
-            )
-            expected["xdouble"] = round(
-                float(0) if expected["xdouble"] is None else expected["xdouble"] + 1.0001, 4
-            )
-            expected["xfloat"] = round(
-                float(0) if expected["xfloat"] is None else expected["xfloat"] + 1.01, 2
-            )
+            expected["rownumber"] = 0 if expected["rownumber"] is None else expected["rownumber"] + 1
+            expected["rowguid"] = text_type("0000000{0}-0000-0000-0001-020304050607".format(expected["rownumber"]))
+            expected["xdouble"] = round(float(0) if expected["xdouble"] is None else expected["xdouble"] + 1.0001, 4)
+            expected["xfloat"] = round(float(0) if expected["xfloat"] is None else expected["xfloat"] + 1.01, 2)
             expected["xbool"] = False if expected["xbool"] is None else not expected["xbool"]
             expected["xint16"] = 0 if expected["xint16"] is None else expected["xint16"] + 1
             expected["xint32"] = 0 if expected["xint32"] is None else expected["xint32"] + 1
@@ -168,9 +161,7 @@ class KustoClientTests(unittest.TestCase):
             expected["xuint16"] = 0 if expected["xuint16"] is None else expected["xuint16"] + 1
             expected["xuint32"] = 0 if expected["xuint32"] is None else expected["xuint32"] + 1
             expected["xuint64"] = 0 if expected["xuint64"] is None else expected["xuint64"] + 1
-            expected["xdate"] = expected["xdate"] or datetime(
-                2013, 1, 1, 1, 1, 1, 0, tzinfo=tzutc()
-            )
+            expected["xdate"] = expected["xdate"] or datetime(2013, 1, 1, 1, 1, 1, 0, tzinfo=tzutc())
             expected["xdate"] = expected["xdate"].replace(year=expected["xdate"].year + 1)
             expected["xsmalltext"] = DIGIT_WORDS[int(expected["xint16"])]
             expected["xtext"] = DIGIT_WORDS[int(expected["xint16"])]
@@ -179,17 +170,14 @@ class KustoClientTests(unittest.TestCase):
             expected["xtime"] = (
                 timedelta()
                 if expected["xtime"] is None
-                else (abs(expected["xtime"]) + timedelta(seconds=1, microseconds=microseconds))
+                else (abs(expected["xtime"]) + timedelta(days=1, seconds=1, microseconds=microseconds))
                 * (-1) ** (expected["rownumber"] + 1)
             )
             if expected["xint16"] > 0:
-                expected["xdynamicWithNulls"] = text_type(
-                    '{{"rowId":{0},"arr":[0,{0}]}}'.format(expected["xint16"])
-                )
+                expected["xdynamicWithNulls"] = text_type('{{"rowId":{0},"arr":[0,{0}]}}'.format(expected["xint16"]))
 
     @patch("requests.post", side_effect=mocked_requests_post)
-    @patch("azure.kusto.data.security._AadHelper.acquire_token", side_effect=mocked_aad_helper)
-    def test_sanity_control_command(self, mock_post, mock_aad):
+    def test_sanity_control_command(self, mock_post):
         """Tests contol command."""
         client = KustoClient("https://somecluster.kusto.windows.net")
         response = client.execute_mgmt("NetDefaultDB", ".show version")
@@ -202,25 +190,26 @@ class KustoClientTests(unittest.TestCase):
         result = primary_table[0]
         self.assertEqual(result["BuildVersion"], "1.0.6693.14577")
         self.assertEqual(
-            result["BuildTime"],
-            datetime(year=2018, month=4, day=29, hour=8, minute=5, second=54, tzinfo=tzutc()),
+            result["BuildTime"], datetime(year=2018, month=4, day=29, hour=8, minute=5, second=54, tzinfo=tzutc())
         )
         self.assertEqual(result["ServiceType"], "Engine")
         self.assertEqual(result["ProductVersion"], "KustoMain_2018.04.29.5")
 
+    @pytest.mark.skipif(not pandas_installed, reason="requires pandas")
     @patch("requests.post", side_effect=mocked_requests_post)
-    @patch("azure.kusto.data.security._AadHelper.acquire_token", side_effect=mocked_aad_helper)
-    def test_sanity_data_frame(self, mock_post, mock_aad):
+    def test_sanity_data_frame(self, mock_post):
         """Tests KustoResponse to pandas.DataFrame."""
+
+        from pandas import DataFrame, Series
+        from pandas.util.testing import assert_frame_equal
+
         client = KustoClient("https://somecluster.kusto.windows.net")
-        data_frame = (
-            client.execute_query("PythonTest", "Deft")
-            .primary_results[0]
-            .to_dataframe(errors="ignore")
+        data_frame = dataframe_from_result_table(
+            client.execute_query("PythonTest", "Deft").primary_results[0], raise_errors=False
         )
         self.assertEqual(len(data_frame.columns), 19)
         expected_dict = {
-            "rownumber": Series([None, 0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]),
+            "rownumber": Series([None, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
             "rowguid": Series(
                 [
                     "",
@@ -237,20 +226,16 @@ class KustoClientTests(unittest.TestCase):
                 ],
                 dtype=object,
             ),
-            "xdouble": Series(
-                [None, 0., 1.0001, 2.0002, 3.0003, 4.0004, 5.0005, 6.0006, 7.0007, 8.0008, 9.0009]
-            ),
-            "xfloat": Series([None, 0., 1.01, 2.02, 3.03, 4.04, 5.05, 6.06, 7.07, 8.08, 9.09]),
-            "xbool": Series(
-                [None, False, True, False, True, False, True, False, True, False, True], dtype=bool
-            ),
-            "xint16": Series([None, 0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]),
-            "xint32": Series([None, 0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]),
-            "xint64": Series([None, 0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]),
-            "xuint8": Series([None, 0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]),
-            "xuint16": Series([None, 0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]),
-            "xuint32": Series([None, 0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]),
-            "xuint64": Series([None, 0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]),
+            "xdouble": Series([None, 0.0, 1.0001, 2.0002, 3.0003, 4.0004, 5.0005, 6.0006, 7.0007, 8.0008, 9.0009]),
+            "xfloat": Series([None, 0.0, 1.01, 2.02, 3.03, 4.04, 5.05, 6.06, 7.07, 8.08, 9.09]),
+            "xbool": Series([None, False, True, False, True, False, True, False, True, False, True], dtype=bool),
+            "xint16": Series([None, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
+            "xint32": Series([None, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
+            "xint64": Series([None, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
+            "xuint8": Series([None, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
+            "xuint16": Series([None, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
+            "xuint32": Series([None, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
+            "xuint64": Series([None, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
             "xdate": Series(
                 [
                     "NaT",
@@ -268,53 +253,25 @@ class KustoClientTests(unittest.TestCase):
                 dtype="datetime64[ns]",
             ),
             "xsmalltext": Series(
-                [
-                    "",
-                    "Zero",
-                    "One",
-                    "Two",
-                    "Three",
-                    "Four",
-                    "Five",
-                    "Six",
-                    "Seven",
-                    "Eight",
-                    "Nine",
-                ],
-                dtype=object,
+                ["", "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"], dtype=object
             ),
             "xtext": Series(
-                [
-                    "",
-                    "Zero",
-                    "One",
-                    "Two",
-                    "Three",
-                    "Four",
-                    "Five",
-                    "Six",
-                    "Seven",
-                    "Eight",
-                    "Nine",
-                ],
-                dtype=object,
+                ["", "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"], dtype=object
             ),
-            "xnumberAsText": Series(
-                ["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], dtype=object
-            ),
+            "xnumberAsText": Series(["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], dtype=object),
             "xtime": Series(
                 [
                     "NaT",
                     0,
-                    "00:00:01.0010001",
-                    "-00:00:02.0020002",
-                    "00:00:03.0030003",
-                    "-00:00:04.0040004",
-                    "00:00:05.0050005",
-                    "-00:00:06.0060006",
-                    "00:00:07.0070007",
-                    "-00:00:08.0080008",
-                    "00:00:09.0090009",
+                    "1 days 00:00:01.0010001",
+                    "-2 days 00:00:02.0020002",
+                    "3 days 00:00:03.0030003",
+                    "-4 days 00:00:04.0040004",
+                    "5 days 00:00:05.0050005",
+                    "-6 days 00:00:06.0060006",
+                    "7 days 00:00:07.0070007",
+                    "-8 days 00:00:08.0080008",
+                    "9 days 00:00:09.0090009",
                 ],
                 dtype="timedelta64[ns]",
             ),
@@ -362,25 +319,26 @@ class KustoClientTests(unittest.TestCase):
         assert_frame_equal(data_frame, expected_data_frame)
 
     @patch("requests.post", side_effect=mocked_requests_post)
-    @patch("azure.kusto.data.security._AadHelper.acquire_token", side_effect=mocked_aad_helper)
-    def test_partial_results(self, mock_post, mock_aad):
+    def test_partial_results(self, mock_post):
         """Tests partial results."""
         client = KustoClient("https://somecluster.kusto.windows.net")
-        query = """set truncationmaxrecords = 1;
-range x from 1 to 2 step 1"""
-        self.assertRaises(KustoServiceError, client.execute_query, "PythonTest", query)
-        response = client.execute_query("PythonTest", query, accept_partial_results=True)
+        query = """set truncationmaxrecords = 5;
+range x from 1 to 10 step 1"""
+        properties = ClientRequestProperties()
+        properties.set_option(ClientRequestProperties.OptionDeferPartialQueryFailures, False)
+        self.assertRaises(KustoServiceError, client.execute_query, "PythonTest", query, properties)
+        properties.set_option(ClientRequestProperties.OptionDeferPartialQueryFailures, True)
+        response = client.execute_query("PythonTest", query, properties)
         self.assertEqual(response.errors_count, 1)
         self.assertIn("E_QUERY_RESULT_SET_TOO_LARGE", response.get_exceptions()[0])
         self.assertEqual(len(response), 3)
         results = list(response.primary_results[0])
-        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results), 5)
         self.assertEqual(results[0]["x"], 1)
 
     @patch("requests.post", side_effect=mocked_requests_post)
-    @patch("azure.kusto.data.security._AadHelper.acquire_token", side_effect=mocked_aad_helper)
-    def test_admin_then_query(self, mock_post, mock_aad):
-        """Tests partial results."""
+    def test_admin_then_query(self, mock_post):
+        """Tests admin then query."""
         client = KustoClient("https://somecluster.kusto.windows.net")
         query = ".show tables | project DatabaseName, TableName"
         response = client.execute_mgmt("PythonTest", query)
